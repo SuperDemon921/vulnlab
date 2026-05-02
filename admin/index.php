@@ -24,6 +24,7 @@ if (!isset($_SESSION['user_id'])) {
       <a href="users.php">用户管理</a> |
       <a href="articles.php">文章管理</a> |
       <a href="comments.php">评论管理</a> |
+      <a href="feed.php">RSS订阅管理</a> |
       <a href="../index.php">返回前台</a> |
       <a href="../logout.php">退出</a>
   </nav>

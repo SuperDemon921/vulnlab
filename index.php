@@ -26,6 +26,7 @@ $conn->close();
           欢迎，<?php echo $_SESSION['username']; ?> |
           <a href="profile.php?id=<?php echo $_SESSION['user_id']; ?>">个人中心</a> |
           <a href="upload.php">上传文件</a> |
+          <a href="browse.php">网页浏览</a> |
           <?php if ($_SESSION['role'] == 1): ?>
               <a href="admin/index.php">管理后台</a> |
           <?php endif; ?>

