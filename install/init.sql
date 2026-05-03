@@ -63,3 +63,15 @@ INSERT INTO `comments` (`article_id`, `user_id`, `content`) VALUES
 (2, 4, '直接拼接 SQL 真的太危险了。'),
 (3, 3, '文件上传漏洞是重灾区。'),
 (4, 2, '存储型 XSS 危害比反射型更大。');
+
+-- ----------------------------------------
+-- RSS 订阅源表
+-- ----------------------------------------
+DROP TABLE IF EXISTS `feeds`;
+CREATE TABLE `feeds` (
+    `id`          INT AUTO_INCREMENT PRIMARY KEY,
+    `name`        VARCHAR(255) NOT NULL,
+    `url`         TEXT         NOT NULL,
+    `article_count` INT        NOT NULL DEFAULT 0,
+    `created_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
