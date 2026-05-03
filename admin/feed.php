@@ -58,12 +58,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pub   = isset($item->pubDate) ? (string) $item->pubDate : '';
 
                     // 避免重复添加
-                    $check = $conn->query("SELECT id FROM articles WHERE title = '$title' LIMIT 1");
+                    $checkStmt = $conn->prepare("SELECT id FROM articles WHERE title = ? LIMIT 1");
+                    $checkStmt->bind_param('s', $title);
+                    $checkStmt->execute();
+                    $check = $checkStmt->get_result();
                     if ($check->num_rows === 0) {
                         $author_id = $_SESSION['user_id'];
-                        $conn->query("INSERT INTO articles (title, content, author_id) VALUES ('$title', '$desc', $author_id)");
+                        $insertStmt = $conn->prepare("INSERT INTO articles (title, content, author_id) VALUES (?, ?, ?)");
+                        $link = (string) $item->link;
+                        $insertStmt->bind_param('ssi', $title, $desc, $author_id);
+                        $insertStmt->execute();
                         $count++;
                     }
+                    $checkStmt->close();
+                    $insertStmt->close();
                 }
 
                 $message = "RSS 解析成功，导入 {$count} 篇文章";
