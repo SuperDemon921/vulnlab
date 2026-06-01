@@ -13,7 +13,7 @@ DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
     `id`         INT AUTO_INCREMENT PRIMARY KEY,
     `username`   VARCHAR(50)  NOT NULL UNIQUE,
-    `password`   VARCHAR(50)  NOT NULL,
+    `password`   VARCHAR(255)  NOT NULL,               -- 存 password_hash 结果
     `email`      VARCHAR(100) NOT NULL,
     `role`       TINYINT      NOT NULL DEFAULT 0 COMMENT '0=普通用户 1=管理员',
     `avatar`     VARCHAR(255) DEFAULT 'uploads/default.png',
@@ -21,10 +21,10 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 INSERT INTO `users` (`username`, `password`, `email`, `role`) VALUES
-('admin',   'admin123',    'admin@test.com',   1),
-('alice',   'alice123',    'alice@test.com',   0),
+('admin',   '$2y$10$T50dK1M2pqPc3kJcaBkgOeAHGEXvzDI9WmGwlQoUQzUv4o1BYXW5i',    'admin@test.com',   1),
+('alice',   '$2y$10$CxOs7qJOGVqa9aJ/k2PGPeK/3v8H6swvondP2p/x5ybPcDNBBRpoG',    'alice@test.com',   0),
 ('bob',     'bob123',      'bob@test.com',     0),
-('charlie', 'charlie123',  'charlie@test.com', 0);
+('charlie', '$2y$10$jW2fQ87Cxq6nPsxn.w6gYuexNaBLW53HxEYc7MN3U5lYpw19APv9O',  'charlie@test.com', 0);
 
 -- ----------------------------------------
 -- 文章表

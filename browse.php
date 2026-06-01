@@ -1,29 +1,43 @@
 <?php
-session_start();
+// session_start();
 require_once 'conf/db.php';
+require_login();
 
-if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php');
-    exit;
-}
+  $target = trim((string)($_GET['url'] ?? ''));  //简单处理用户传递的url，默认为空字符串
+  $html   = '';
+  $error  = '';
 
-$html   = '';
-$error  = '';
-$target = $_GET['url'] ?? '';
+  if ($target !== '') {
+      try {
+          $raw  = safe_fetch($target);                              //fetch页面
+          $html = '<h3>页面内容：</h3><pre>' . e($raw) . '</pre>';
+      } catch (Throwable $ex) {
+          $error = $ex->getMessage();
+      }
+  }
 
-// SSRF：直接使用 file_get_contents 获取任意 URL 内容，未做任何过滤
-if ($target !== '') {
-    // 漏洞：未限制协议（支持 file://）、未限制内网地址（127.0.0.1、10.x.x.x）
-    // 漏洞：未校验 URL 格式，可注入 IP 或协议
-    $result = @file_get_contents($target);
+// if (!isset($_SESSION['user_id'])) {
+//     header('Location: login.php');
+//     exit;
+// }
 
-    if ($result !== false) {
-        // 漏洞：将获取的内容直接输出到页面
-        $html = '<h3>页面内容：</h3><pre>' . htmlspecialchars($result) . '</pre>';
-    } else {
-        $error = '无法访问该地址，请检查 URL 是否有效';
-    }
-}
+// $html   = '';
+// $error  = '';
+// $target = $_GET['url'] ?? '';
+
+// // SSRF：直接使用 file_get_contents 获取任意 URL 内容，未做任何过滤
+// if ($target !== '') {
+//     // 漏洞：未限制协议（支持 file://）、未限制内网地址（127.0.0.1、10.x.x.x）
+//     // 漏洞：未校验 URL 格式，可注入 IP 或协议
+//     $result = @file_get_contents($target);
+
+//     if ($result !== false) {
+//         // 漏洞：将获取的内容直接输出到页面
+//         $html = '<h3>页面内容：</h3><pre>' . htmlspecialchars($result) . '</pre>';
+//     } else {
+//         $error = '无法访问该地址，请检查 URL 是否有效';
+//     }
+// }
 ?>
 <!DOCTYPE html>
 <html lang="zh">
@@ -38,29 +52,20 @@ if ($target !== '') {
 <h2>网页浏览</h2>
 
 <form method="GET">
-    <input type="text" name="url" value="<?php echo htmlspecialchars($target); ?>" placeholder="输入网址，如 http://localhost/vulnlab/" style="width:400px;">
+    <input type="text" name="url" value="<?= e($target) ?>" placeholder="http(s):// 公网地址" style="width:400px;">
     <button type="submit">浏览</button>
 </form>
 
 <hr>
 
 <?php if ($error): ?>
-    <p style="color:red;"><?php echo $error; ?></p>
+    <p style="color:red;"><?= e($error) ?></p>
 <?php endif; ?>
 
 <?php if ($html): ?>
-    <p>正在浏览：<?php echo htmlspecialchars($target); ?></p>
-    <?php echo $html; ?>
+    <p>正在浏览：<?= e($target) ?></p>
+    <?= $html /* 已是经过 e() 处理过的内容 */ ?>
 <?php endif; ?>
-
-<hr>
-<h4>SSRF 利用提示（靶场说明）</h4>
-<ul>
-    <li>访问内网服务：http://127.0.0.1:3306（数据库端口）</li>
-    <li>读取本地文件：file:///C:/Windows/win.ini</li>
-    <li>探测内网端口：http://10.0.0.1:8080</li>
-    <li>读取数据库配置：http://127.0.0.1/vulnlab/conf/db.php</li>
-</ul>
 
 </body>
 </html>

@@ -1,86 +1,76 @@
 <?php
-session_start();
-
-// 漏洞：垂直越权，仅判断登录态，不检查 role
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../login.php');
-    exit;
-}
-
 require_once '../conf/db.php';
-$conn = db_conn();
+require_admin();
 
+$pdo      = db();
 $message  = '';
 $error    = '';
-$feeds    = [];
 $feed_url = '';
 
-// 获取所有已添加的 RSS 源
-$feeds_result = $conn->query("SELECT * FROM feeds ORDER BY id DESC");
-if ($feeds_result) {
-    while ($row = $feeds_result->fetch_assoc()) {
-        $feeds[] = $row;
-    }
-}
-
-// 处理添加订阅（POST）
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $feed_url = trim($_POST['feed_url']);
-    $name     = trim($_POST['name']);
+      csrf_check();
 
-    if ($feed_url === '') {
-        $error = '请输入订阅地址';
-    } else {
-        // SSRF：直接使用 file_get_contents 获取任意 URL 内容，未做任何协议/内网限制
-        // payload：http://attacker.com/evil.xml（远程恶意 XML）
-        $xml = @file_get_contents($feed_url);
+      $feed_url = trim((string)($_POST['feed_url'] ?? ''));
+      $name     = trim((string)($_POST['name'] ?? ''));
 
-        if ($xml === false) {
-            $error = '无法访问该地址，请检查 URL 是否有效';
-        } else {
-            // XXE：没有禁用外部实体，且使用 LIBXML_NOENT 允许展开外部实体
-            // payload 恶意 XML 中的 &xxe; 会被替换为服务器本地文件内容
-            $xmlData = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NOENT);
+      if ($feed_url === '') {
+          $error = '请输入订阅地址';
+      } else {
+          try {
+              $xml = safe_fetch($feed_url);
 
-            if ($xmlData === false) {
-                $error = 'RSS 解析失败，请检查格式';
-            } else {
-                // 保存订阅源
-                $safe_name = empty($name) ? $feed_url : $name;
-                $conn->query("INSERT INTO feeds (name, url, article_count) VALUES ('$safe_name', '$feed_url', 0)");
+              // 关闭外部实体，禁止网络访问。php8.0默认禁用外部实体，所以加个版本判断
+              if (\PHP_VERSION_ID < 80000) { libxml_disable_entity_loader(true); }
+              //XML 解析错误不直接输出到页面
+              libxml_use_internal_errors(true);
 
-                // 从 RSS 中提取文章
-                $count = 0;
-                foreach ($xmlData->channel->item as $item) {
-                    $title = (string) $item->title;
-                    $link  = (string) $item->link;
-                    $desc  = (string) $item->description;
-                    $pub   = isset($item->pubDate) ? (string) $item->pubDate : '';
+              $dom = new DOMDocument();
+          //使用DOMDocument对象安全解析xml，解析过程中禁止网络请求，不产生警告，不产生错误输出
+              $ok  = $dom->loadXML($xml, LIBXML_NONET | LIBXML_NOWARNING | LIBXML_NOERROR);   
+              if (!$ok) {
+                  $error = 'RSS 解析失败';
+              } else {
+                  // 遍历根节点，发现有 DOCTYPE 节点直接抛异常，显式拒绝带 DOCTYPE 的输入（RSS 不需要 DTD）
+                  foreach ($dom->childNodes as $child) {
+                      if ($child->nodeType === XML_DOCUMENT_TYPE_NODE) {
+                          throw new RuntimeException('禁止包含 DOCTYPE 的 XML');
+                      }
+                  }
+                  //将已经安全解析好的DOMDocument对象转成SimpleXMLElement方便读取数据
+                  $xmlData = simplexml_import_dom($dom);
+                  $safe_name = $name !== '' ? $name : $feed_url;                                    //若用户未传name，则使用url替代
 
-                    // 避免重复添加
-                    $checkStmt = $conn->prepare("SELECT id FROM articles WHERE title = ? LIMIT 1");
-                    $checkStmt->bind_param('s', $title);
-                    $checkStmt->execute();
-                    $check = $checkStmt->get_result();
-                    if ($check->num_rows === 0) {
-                        $author_id = $_SESSION['user_id'];
-                        $insertStmt = $conn->prepare("INSERT INTO articles (title, content, author_id) VALUES (?, ?, ?)");
-                        $link = (string) $item->link;
-                        $insertStmt->bind_param('ssi', $title, $desc, $author_id);
-                        $insertStmt->execute();
-                        $count++;
-                    }
-                    $checkStmt->close();
-                    $insertStmt->close();
-                }
+                  $pdo->prepare('INSERT INTO feeds (name, url, article_count) VALUES (?, ?, 0)')    //预编译写入数据库
+                      ->execute([$safe_name, $feed_url]);
 
-                $message = "RSS 解析成功，导入 {$count} 篇文章";
-            }
-        }
-    }
-}
+                      //遍历文章并去重写入
+                  $count = 0;
+                  if (isset($xmlData->channel->item)) {
+                    //遍历 RSS 的每一个 <item>，先查标题是否已存在（去重），不存在才插入
+                      foreach ($xmlData->channel->item as $item) {      
+                          $title = trim((string)$item->title);          //提取文章title
+                          $desc  = (string)$item->description;          //提取文章描述
+                          if ($title === '') continue;
 
-$conn->close();
+                          $check = $pdo->prepare('SELECT 1 FROM articles WHERE title = ? LIMIT 1');   //检查文章标题是否存在，LIMIT 1 让查询尽早停止，性能上更合理。
+                          $check->execute([$title]);
+                          if (!$check->fetchColumn()) {
+                              $ins = $pdo->prepare(
+                                  'INSERT INTO articles (title, content, author_id) VALUES (?, ?, ?)'
+                              );
+                              $ins->execute([$title, $desc, current_user_id()]);  //将文章信息写入数据库
+                              $count++;
+                          }
+                      }
+                  }
+                  $message = "RSS 解析成功，导入 {$count} 篇文章";
+              }
+          } catch (Throwable $ex) {
+              $error = $ex->getMessage();
+          }
+      }
+  }
+  $feeds = $pdo->query('SELECT id, name, url, article_count, created_at FROM feeds ORDER BY id DESC')->fetchAll();  //查询已有订阅列表
 ?>
 <!DOCTYPE html>
 <html lang="zh">
@@ -94,19 +84,23 @@ $conn->close();
 <h2>RSS 订阅管理</h2>
 
 <?php if ($message): ?>
-    <p style="color:green;"><?php echo $message; ?></p>
+    <p style="color:green;"><?= e($message) ?></p>
 <?php endif; ?>
 
 <?php if ($error): ?>
-    <p style="color:red;"><?php echo $error; ?></p>
+    <p style="color:red;"><?= e($error) ?></p>
 <?php endif; ?>
 
 <hr>
 <h3>添加订阅</h3>
 <form method="POST">
-    <label>名称：<input type="text" name="name" placeholder="可选，留空则使用 URL" style="width:200px;"></label><br><br>
-    <label>RSS 地址：<input type="text" name="feed_url" value="<?php echo htmlspecialchars($feed_url); ?>" placeholder="http://example.com/feed.xml" style="width:400px;"></label><br><br>
-    <button type="submit">添加订阅</button>
+    <?= csrf_field() ?>
+    <label>名称：<input type="text" name="name" placeholder="可选" style="width:200px;"></label><br><br>
+      <label>RSS 地址：
+          <input type="text" name="feed_url" value="<?= e($feed_url) ?>"
+                 placeholder="http(s)://example.com/feed.xml" style="width:400px;">
+      </label><br><br>
+      <button type="submit">添加订阅</button>
 </form>
 
 <hr>
@@ -116,38 +110,26 @@ $conn->close();
     <p>暂无订阅</p>
 <?php else: ?>
     <table border="1" cellpadding="6">
-        <tr>
-            <th>ID</th><th>名称</th><th>订阅地址</th><th>文章数</th><th>添加时间</th><th>操作</th>
-        </tr>
-        <?php foreach ($feeds as $f): ?>
-        <tr>
-            <td><?php echo $f['id']; ?></td>
-            <td><?php echo $f['name']; ?></td>
-            <td>
-                <!-- 漏洞：URL 直接输出，未转义，反射型 XSS -->
-                <a href="<?php echo $f['url']; ?>" target="_blank">
-                    <?php echo $f['url']; ?>
-                </a>
-            </td>
-            <td><?php echo $f['article_count']; ?></td>
-            <td><?php echo $f['created_at']; ?></td>
-            <td>
-                <!-- 漏洞：无 CSRF token -->
-                <a href="delete_feed.php?id=<?php echo $f['id']; ?>" onclick="return confirm('确认删除？')">删除</a>
-            </td>
-        </tr>
-        <?php endforeach; ?>
-    </table>
+          <tr><th>ID</th><th>名称</th><th>订阅地址</th><th>文章数</th><th>添加时间</th><th>操作</th></tr>
+          <?php foreach ($feeds as $f): ?>
+          <tr>
+              <td><?= (int)$f['id'] ?></td>
+              <td><?= e($f['name']) ?></td>
+              <td><?= e($f['url']) ?></td>
+              <td><?= (int)$f['article_count'] ?></td>
+              <td><?= e($f['created_at']) ?></td>
+              <td>
+                  <form method="POST" action="delete_feed.php" style="display:inline" onsubmit="return
+  confirm('确认删除？')">
+                      <?= csrf_field() ?>
+                      <input type="hidden" name="id" value="<?= (int)$f['id'] ?>">
+                      <button type="submit">删除</button>
+                  </form>
+              </td>
+          </tr>
+          <?php endforeach; ?>
+      </table>
 <?php endif; ?>
-
-<hr>
-<h4>安全说明（靶场）</h4>
-<ul>
-    <li>此功能存在 <strong>SSRF</strong>：服务器会主动请求你输入的任意 URL</li>
-    <li>此功能存在 <strong>XXE</strong>：解析 RSS XML 时允许外部实体展开</li>
-    <li>可利用此漏洞读取服务器本地文件、探测内网服务</li>
-    <li>详细利用方法见 <a href="../README.md">README.md</a></li>
-</ul>
 
 </body>
 </html>

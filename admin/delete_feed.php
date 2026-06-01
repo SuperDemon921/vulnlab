@@ -1,21 +1,20 @@
 <?php
-session_start();
+  require_once '../conf/db.php';
+  require_admin();
 
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../login.php');
-    exit;
-}
+  if ($_SERVER['REQUEST_METHOD'] !== 'POST') {  //拒绝非POST请求
+      http_response_code(405);
+      exit('Method Not Allowed');
+  }
+  csrf_check();                                  //csrf_token检查
 
-require_once '../conf/db.php';
-$id = $_GET['id'] ?? '';
+  $id = (int)($_POST['id'] ?? 0);
+  if ($id <= 0) {                    //判断id是否合法
+      http_response_code(400);
+      exit('参数错误');
+  }
 
-if ($id === '') {
-    die('参数缺失');
-}
-
-$conn = db_conn();
-$conn->query("DELETE FROM feeds WHERE id = $id") or die('删除失败：' . $conn->error);
-$conn->close();
-
-header('Location: feed.php');
-exit;
+  db()->prepare('DELETE FROM feeds WHERE id = ?')->execute([$id]);       //删除订阅信息
+  
+  header('Location: feed.php');
+  exit;

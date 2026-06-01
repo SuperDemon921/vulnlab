@@ -1,32 +1,20 @@
   <?php
-  session_start();
+//   session_start();
   require_once 'conf/db.php';
 
-  // 漏洞1：反射型 XSS —— $q 直接输出到页面，未做任何转义
-  // 漏洞2：SQL 注入 —— $q 直接拼入查询语句
-  $q = $_GET['q'] ?? '';
-
+  $q = trim((string)($_GET['q'] ?? ''));     //将用户输入转为字符串，过滤空格，默认为空
   $results = [];
-
-  if ($q !== '') {
-      $conn = db_conn();
-
-      // 漏洞：SQL 注入
-      // payload：' UNION SELECT id,username,password,email,created_at FROM users--
-      $sql    = "SELECT a.id, a.title, a.content, a.created_at, u.username
-                 FROM articles a
-                 JOIN users u ON a.author_id = u.id
-                 WHERE a.title LIKE '%$q%' OR a.content LIKE '%$q%'";
-
-      // 漏洞：报错直接输出
-      $result = $conn->query($sql) or die('查询出错：' . $conn->error);
-
-      while ($row = $result->fetch_assoc()) {
-          $results[] = $row;
-      }
-
-      $conn->close();
+  if ($q !== '') {           
+      $like = '%' . $q . '%';         //将用户输入的关键字前后加上%，以便模糊查询
+      //预编译处理
+      $stmt = db()->prepare('    
+          SELECT a.id, a.title, a.content, a.created_at, u.username
+          FROM articles a JOIN users u ON a.author_id = u.id
+          WHERE a.title LIKE ? OR a.content LIKE ?');
+      $stmt->execute([$like, $like]);      //模糊查询
+      $results = $stmt->fetchAll();
   }
+
   ?>
   <!DOCTYPE html>
   <html lang="zh">
@@ -41,17 +29,16 @@
   <h2>搜索结果</h2>
 
   <form method="GET" action="search.php">
-      <!-- 漏洞：value 直接输出 $q，反射型 XSS
-           payload：?q=<script>alert(document.cookie)</script>  -->
-      <input type="text" name="q" value="<?php echo $q; ?>" style="width:300px;">
+      
+      <input type="text" name="q" value="<?= e($q) ?>" style="width:300px;">  <!--转义用户输入-->
       <button type="submit">搜索</button>
   </form>
 
   <hr>
 
   <?php if ($q !== ''): ?>
-      <!-- 漏洞：$q 直接拼入字符串输出，反射型 XSS 二次触发点 -->
-      <p>关键词 "<b><?php echo $q; ?></b>" 的搜索结果，共 <?php echo count($results); ?> 条：</p>
+      
+      <p>关键词 "<b><?= e($q) ?></b>" 的搜索结果，共  <?= count($results) ?> 条：</p>
   <?php endif; ?>
 
   <?php if (!empty($results)): ?>
@@ -59,12 +46,12 @@
           <div style="border:1px solid #ccc; margin:10px; padding:10px;">
               <h4>
                   <!-- 漏洞：标题未转义，若数据库内容含 XSS payload 则触发存储型 XSS -->
-                  <a href="article.php?id=<?php echo $row['id']; ?>">
-                      <?php echo $row['title']; ?>
+                  <a href="article.php?id=<?= (int)$row['id'] ?>">
+                      <?= e($row['title']) ?>
                   </a>
               </h4>
-              <p><?php echo mb_substr($row['content'], 0, 100); ?>...</p>
-              <small>作者：<?php echo $row['username']; ?> | <?php echo $row['created_at']; ?></small>
+              <p><?= e(mb_substr($row['content'], 0, 100)) ?>...</p>
+              <small>作者：<?= e($row['username']) ?> | <?= e($row['created_at']) ?></small>
           </div>
       <?php endforeach; ?>
   <?php elseif ($q !== ''): ?>
